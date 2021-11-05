@@ -4,7 +4,7 @@ import {
   GraphQLObjectType,
   GraphQLID,
   GraphQLString,
-  GraphQLList,
+  GraphQLList, GraphQLInt,
 } from 'graphql';
 const PersonType = new GraphQLObjectType({
   name: 'Person',
@@ -14,18 +14,24 @@ const PersonType = new GraphQLObjectType({
   },
 });
 
-const peopleData = [
-  { id: 1, name: 'John Smith' },
-  { id: 2, name: 'Sara Smith' },
-  { id: 3, name: 'Budd Deey' },
-];
+const counterData = {
+  id: 1, count: 0
+};
+
+const CounterType = new GraphQLObjectType({
+  name: 'Counter',
+  fields: {
+    id: { type: GraphQLID },
+    count: { type: GraphQLInt }
+  }
+})
 
 const QueryType = new GraphQLObjectType({
   name: 'Query',
   fields: {
-    people: {
-      type: new GraphQLList(PersonType),
-      resolve: () => peopleData,
+    counter: {
+      type: CounterType,
+      resolve: () => counterData
     },
   },
 });
@@ -33,19 +39,14 @@ const QueryType = new GraphQLObjectType({
 const MutationType = new GraphQLObjectType({
   name: 'Mutation',
   fields: {
-    addPerson: {
-      type: PersonType,
+    setCount: {
+      type: CounterType,
       args: {
-        name: { type: GraphQLString },
+        count: { type: GraphQLInt },
       },
-      resolve: function (_, { name }) {
-        const person = {
-          id: peopleData[peopleData.length - 1].id + 1,
-          name,
-        };
-
-        peopleData.push(person);
-        return person;
+      resolve: function (_, { count }) {
+        counterData.count = count;
+        return counterData;
       }
     },
   },
@@ -93,21 +94,22 @@ import {
   useMutation,
 } from "@apollo/client";
 import "./index.css";
+import {AbortLink} from "./abort.link";
 
-const ALL_PEOPLE = gql`
-  query AllPeople {
-    people {
+const COUNT = gql`
+  query Count {
+    counter {
       id
-      name
+      count
     }
   }
 `;
 
-const ADD_PERSON = gql`
-  mutation AddPerson($name: String) {
-    addPerson(name: $name) {
+const SET_COUNT = gql`
+  mutation SetCount($count: Int!) {
+    setCount(count: $count) {
       id
-      name
+      count
     }
   }
 `;
@@ -117,22 +119,18 @@ function App() {
   const {
     loading,
     data,
-  } = useQuery(ALL_PEOPLE);
+  } = useQuery(COUNT);
 
-  const [addPerson] = useMutation(ADD_PERSON, {
-    update: (cache, { data: { addPerson: addPersonData } }) => {
-      const peopleResult = cache.readQuery({ query: ALL_PEOPLE });
-
-      cache.writeQuery({
-        query: ALL_PEOPLE,
-        data: {
-          ...peopleResult,
-          people: [
-            ...peopleResult.people,
-            addPersonData,
-          ],
-        },
-      });
+  const [setCount] = useMutation(SET_COUNT, {
+    optimisticResponse: ({ count }) => {
+      return {
+        __typename: 'Mutation',
+        setCount: {
+          __typename: 'Counter',
+          id: 1,
+          count,
+        }
+      };
     },
   });
 
@@ -142,40 +140,41 @@ function App() {
       <p>
         This application can be used to demonstrate an error in Apollo Client.
       </p>
-      <div className="add-person">
-        <label htmlFor="name">Name</label>
-        <input
-          type="text"
-          name="name"
-          value={name}
-          onChange={evt => setName(evt.target.value)}
-        />
+      <div>
+
+
+        <h3>{data ?  data.counter.count : 0}</h3>
+
+        {loading && (
+                <p>Loading…</p>
+            )}
+
         <button
           onClick={() => {
-            addPerson({ variables: { name } });
-            setName('');
+            setCount({ variables: { count: data.counter.count + 1 }, context: { abortKey: 'op1' } });
           }}
         >
-          Add person
+          Increment with abort
+        </button>
+
+        <button
+            onClick={() => {
+              setCount({ variables: { count: data.counter.count + 1 } });
+            }}
+        >
+          Increment
         </button>
       </div>
-      <h2>Names</h2>
-      {loading ? (
-        <p>Loading…</p>
-      ) : (
-        <ul>
-          {data?.people.map(person => (
-            <li key={person.id}>{person.name}</li>
-          ))}
-        </ul>
-      )}
     </main>
   );
 }
 
 const client = new ApolloClient({
   cache: new InMemoryCache(),
-  link
+  link: ApolloLink.from([
+      new AbortLink('abortKey'),
+      link
+  ])
 });
 
 render(
